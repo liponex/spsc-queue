@@ -116,10 +116,14 @@ pub fn Queue(comptime T: type, comptime log2_len: comptime_int, comptime is_wait
 
             const push_cursor = self.push_cursor.load(.Monotonic);
 
-            while (util.isFull(push_cursor, self.cached_pop_cursor)) {
-                self.cached_pop_cursor = self.pop_cursor.load(.Acquire);
+            // hope the consumer is on another core and spin for a bit
+            ensure_unfull: while (util.isFull(push_cursor, self.cached_pop_cursor)) {
+                for (0..4) |_| {
+                    self.cached_pop_cursor = self.pop_cursor.load(.Acquire);
+                    if (!util.isFull(push_cursor, self.cached_pop_cursor)) break :ensure_unfull;
+                    std.atomic.spinLoopHint();
+                }
 
-                if (!util.isFull(push_cursor, self.cached_pop_cursor)) break;
                 Futex.wait(&self.pop_cursor, self.cached_pop_cursor);
             }
 
@@ -147,7 +151,7 @@ pub fn Queue(comptime T: type, comptime log2_len: comptime_int, comptime is_wait
 
                 self.queue.pop_cursor.store(self.cursor +% 1, .Release);
 
-                if (is_waitable and util.isFull(self.queue.push_cursor.load(.Monotonic), self.cursor))
+                if (is_waitable and util.isFull(self.queue.push_cursor.load(.Acquire), self.cursor))
                     Futex.wake(&self.queue.pop_cursor, 1);
             }
         };
@@ -172,10 +176,14 @@ pub fn Queue(comptime T: type, comptime log2_len: comptime_int, comptime is_wait
 
             const pop_cursor = self.pop_cursor.load(.Monotonic);
 
-            while (util.isEmpty(self.cached_push_cursor, pop_cursor)) {
-                self.cached_push_cursor = self.push_cursor.load(.Acquire);
+            ensure_unempty: while (util.isEmpty(self.cached_push_cursor, pop_cursor)) {
+                // hope the producer is on another core and spin for a bit
+                for (0..4) |_| {
+                    self.cached_push_cursor = self.push_cursor.load(.Acquire);
+                    if (!util.isEmpty(self.cached_push_cursor, pop_cursor)) break :ensure_unempty;
+                    std.atomic.spinLoopHint();
+                }
 
-                if (!util.isEmpty(self.cached_push_cursor, pop_cursor)) break;
                 Futex.wait(&self.push_cursor, self.cached_push_cursor);
             }
 
@@ -389,3 +397,11 @@ test "threaded pushing and popping with blocking" {
 //     popper_a.perform();
 //     popper_b.perform();
 // }
+
+export fn pushw(ptr: *Queue(usize, 4, true), item: usize) void {
+    ptr.push(item);
+}
+
+export fn popw(ptr: *Queue(usize, 4, true)) usize {
+    return ptr.pop();
+}
