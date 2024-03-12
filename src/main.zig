@@ -4,23 +4,20 @@ const assert = std.debug.assert;
 const Atomic = std.atomic.Value;
 const Futex = std.Thread.Futex;
 
-// TODO: real cache line size
-const cache_line_size = 64;
-
 // Based on the CppCon talk by Charles Frasch.
 /// Single-producer, single-consumer queue, `1 << log2_len` elements of type `T` may be enqueued at
 /// the same time.
 pub fn Queue(comptime T: type, comptime log2_len: comptime_int, comptime is_waitable: bool) type {
-    if (1 << log2_len >= 1 << 32 or (1 << log2_len) * @sizeOf(T) > std.math.maxInt(usize)) @compileError("Maximum queue length exceeded");
+    if (log2_len >= 32) @compileError("Maximum queue length exceeded");
 
     return struct {
         buf: [buf_len]T = undefined,
 
-        push_cursor: Atomic(u32) align(cache_line_size) = .{ .raw = 0 },
-        pop_cursor: Atomic(u32) align(cache_line_size) = .{ .raw = 0 },
+        push_cursor: Atomic(u32) align(std.atomic.cache_line) = .{ .raw = 0 },
+        pop_cursor: Atomic(u32) align(std.atomic.cache_line) = .{ .raw = 0 },
 
-        cached_push_cursor: u32 align(cache_line_size) = 0,
-        cached_pop_cursor: u32 align(cache_line_size) = 0,
+        cached_push_cursor: u32 align(std.atomic.cache_line) = 0,
+        cached_pop_cursor: u32 align(std.atomic.cache_line) = 0,
 
         const Self = @This();
 
