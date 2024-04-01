@@ -42,8 +42,8 @@ pub fn Queue(comptime T: type, comptime log2_len: comptime_int, comptime is_wait
 
         /// Returns the number of elements in `self`.
         pub fn len(self: *const Self) usize {
-            const push_cursor = self.push_cursor.load(.Monotonic);
-            const pop_cursor = self.pop_cursor.load(.Monotonic);
+            const push_cursor = self.push_cursor.load(.monotonic);
+            const pop_cursor = self.pop_cursor.load(.monotonic);
 
             assert(push_cursor >= pop_cursor);
 
@@ -52,16 +52,16 @@ pub fn Queue(comptime T: type, comptime log2_len: comptime_int, comptime is_wait
 
         /// Returns whether `self` has no elements in it.
         pub fn isEmpty(self: *const Self) bool {
-            const push_cursor = self.push_cursor.load(.Monotonic);
-            const pop_cursor = self.pop_cursor.load(.Monotonic);
+            const push_cursor = self.push_cursor.load(.monotonic);
+            const pop_cursor = self.pop_cursor.load(.monotonic);
 
             return util.isEmpty(push_cursor, pop_cursor);
         }
 
         /// Returns whether `self` can hold no additional elements.
         pub fn isFull(self: *const Self) bool {
-            const push_cursor = self.push_cursor.load(.Monotonic);
-            const pop_cursor = self.pop_cursor.load(.Monotonic);
+            const push_cursor = self.push_cursor.load(.monotonic);
+            const pop_cursor = self.pop_cursor.load(.monotonic);
 
             return util.isFull(push_cursor, pop_cursor);
         }
@@ -84,10 +84,10 @@ pub fn Queue(comptime T: type, comptime log2_len: comptime_int, comptime is_wait
             }
 
             pub inline fn perform(self: Pusher) void {
-                assert(self.queue.push_cursor.load(.SeqCst) == self.cursor); // user error: initiated another push before the previous one was performed.
-                self.queue.push_cursor.store(self.cursor +% 1, .Release);
+                assert(self.queue.push_cursor.load(.seq_cst) == self.cursor); // user error: initiated another push before the previous one was performed.
+                self.queue.push_cursor.store(self.cursor +% 1, .release);
 
-                if (is_waitable and util.isEmpty(self.cursor, self.queue.pop_cursor.load(.Monotonic)))
+                if (is_waitable and util.isEmpty(self.cursor, self.queue.pop_cursor.load(.monotonic)))
                     Futex.wake(&self.queue.push_cursor, 1);
             }
         };
@@ -95,10 +95,10 @@ pub fn Queue(comptime T: type, comptime log2_len: comptime_int, comptime is_wait
         /// Returns a pusher, or `error.QueueFull` if the queue is full. Initiating a push before
         /// the previous one has been `perform`'d is safety-checked illegal behavior.
         pub fn pusher(self: *Self) error{QueueFull}!Pusher {
-            const push_cursor = self.push_cursor.load(.Monotonic);
+            const push_cursor = self.push_cursor.load(.monotonic);
 
             if (util.isFull(push_cursor, self.cached_pop_cursor)) {
-                self.cached_pop_cursor = self.pop_cursor.load(.Acquire);
+                self.cached_pop_cursor = self.pop_cursor.load(.acquire);
 
                 if (util.isFull(push_cursor, self.cached_pop_cursor)) return error.QueueFull;
             }
@@ -111,12 +111,12 @@ pub fn Queue(comptime T: type, comptime log2_len: comptime_int, comptime is_wait
         pub fn pusherW(self: *Self) Pusher {
             comptime assert(is_waitable);
 
-            const push_cursor = self.push_cursor.load(.Monotonic);
+            const push_cursor = self.push_cursor.load(.monotonic);
 
             // hope the consumer is on another core and spin for a bit
             ensure_unfull: while (util.isFull(push_cursor, self.cached_pop_cursor)) {
                 for (0..4) |_| {
-                    self.cached_pop_cursor = self.pop_cursor.load(.Acquire);
+                    self.cached_pop_cursor = self.pop_cursor.load(.acquire);
                     if (!util.isFull(push_cursor, self.cached_pop_cursor)) break :ensure_unfull;
                     std.atomic.spinLoopHint();
                 }
@@ -144,11 +144,11 @@ pub fn Queue(comptime T: type, comptime log2_len: comptime_int, comptime is_wait
             }
 
             pub inline fn perform(self: Popper) void {
-                assert(self.queue.pop_cursor.load(.SeqCst) == self.cursor); // user error: initiated another pop before the previous one was performed.
+                assert(self.queue.pop_cursor.load(.seq_cst) == self.cursor); // user error: initiated another pop before the previous one was performed.
 
-                self.queue.pop_cursor.store(self.cursor +% 1, .Release);
+                self.queue.pop_cursor.store(self.cursor +% 1, .release);
 
-                if (is_waitable and util.isFull(self.queue.push_cursor.load(.Acquire), self.cursor))
+                if (is_waitable and util.isFull(self.queue.push_cursor.load(.acquire), self.cursor))
                     Futex.wake(&self.queue.pop_cursor, 1);
             }
         };
@@ -156,10 +156,10 @@ pub fn Queue(comptime T: type, comptime log2_len: comptime_int, comptime is_wait
         /// Returns a popper, returning null if the queue is empty. Initiating a pop before the
         /// previous one has been `perform`'d is safety-checked illegal behavior.
         pub fn popper(self: *Self) ?Popper {
-            const pop_cursor = self.pop_cursor.load(.Monotonic);
+            const pop_cursor = self.pop_cursor.load(.monotonic);
 
             if (util.isEmpty(self.cached_push_cursor, pop_cursor)) {
-                self.cached_push_cursor = self.push_cursor.load(.Acquire);
+                self.cached_push_cursor = self.push_cursor.load(.acquire);
                 if (util.isEmpty(self.cached_push_cursor, pop_cursor)) return null;
             }
 
@@ -171,12 +171,12 @@ pub fn Queue(comptime T: type, comptime log2_len: comptime_int, comptime is_wait
         pub fn popperW(self: *Self) Popper {
             comptime assert(is_waitable);
 
-            const pop_cursor = self.pop_cursor.load(.Monotonic);
+            const pop_cursor = self.pop_cursor.load(.monotonic);
 
             ensure_unempty: while (util.isEmpty(self.cached_push_cursor, pop_cursor)) {
                 // hope the producer is on another core and spin for a bit
                 for (0..4) |_| {
-                    self.cached_push_cursor = self.push_cursor.load(.Acquire);
+                    self.cached_push_cursor = self.push_cursor.load(.acquire);
                     if (!util.isEmpty(self.cached_push_cursor, pop_cursor)) break :ensure_unempty;
                     std.atomic.spinLoopHint();
                 }
